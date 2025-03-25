@@ -99,8 +99,7 @@ public class Main {
      */
     private static void validateNumArgs(String[] args, int n) {
         if (args.length != n) {
-            throw new RuntimeException(
-                    String.format("Incorrect operands."));
+            throw new RuntimeException("Incorrect operands.");
         }
     }
 }
