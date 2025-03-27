@@ -30,7 +30,6 @@ public class Commit implements Serializable {
     }
 
     Commit(Date date,String message,String parent, HashMap<String,String> blobs){
-        this.date=date;
         this.message=message;
         this.parents =new String[2];
         this.parents[0] = parent;

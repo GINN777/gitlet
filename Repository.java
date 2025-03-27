@@ -27,11 +27,11 @@ public class Repository {
      */
     public static final File OBJECTS_DIR = join(GITLET_DIR, "objects");
     /**
-     * The .gitlet/objects directory.
+     * The .gitlet/objects/blobs  directory.
      */
     public static final File BLOBS_DIR = join(OBJECTS_DIR, "blobs");
     /**
-     * The .gitlet/objects directory.
+     * The .gitlet/objects/commits  directory.
      */
     public static final File COMMITS_DIR = join(OBJECTS_DIR, "commits");
 
@@ -200,21 +200,24 @@ public class Repository {
         }
 
         /** 构建并保存新的提交 */
+        /**
+         * 几个关键函数： 通过分支名得到该分支的HEAD提交（getHeadCommitID）   通过SHA1值得到commit对象（getCommitBySHA）
+         */
         //Date
         Date timeStamp=new Date();
         //Parent 当前的head作为新提交的commit的parent
-        //读取HEAD文件获取当前分支名
+        //读取HEAD文件获取当前分支名  ---HEAD中存的是当前分支的名字
         String curBranch = readContentsAsString(HEAD);
         String parent = getHeadCommitID(curBranch);  //parent为sha1值
         //Blobs     根据sha-1值得到commit对象--->通过commit对象和index(暂存区的变化)得到newBlobs
         Commit prevCommit=getCommitBySHA(parent);
         HashMap<String, String> newBlobs = getNewBlobs(prevCommit, changes);
-        //创建并保存新的commit TODO:commit操作时这里报错
+        //创建并保存新的commit
         Commit newCommit=new Commit(timeStamp,message,parent,newBlobs);
         String ID=sha1(newCommit.toString());
         newCommit.save(ID);
 
-        /** 更新分支
+        /** 更新当前分支的最新提交
          * 写入新提交的SHA-1哈希值 使得下一次获取当前分支的最新提交时，会返回这个新的提交对象
          * 清空Staging Area */
         writeContents(join(BRANCHES_DIR,curBranch),ID);

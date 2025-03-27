@@ -179,7 +179,7 @@ class Utils {
     /** 将OBJ写入FILE。
      * 序列化 并将其写入文件 */
     static void writeObject(File file, Serializable obj) {
-        //serialize方法将obj对象转换为字节数组
+        //serialize方法将obj对象转换为字节数组返回
         writeContents(file, serialize(obj));
     }
 
