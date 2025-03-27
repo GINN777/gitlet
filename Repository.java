@@ -2,6 +2,10 @@ package gitlet;
 
 import java.io.File;
 import java.util.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static gitlet.Utils. *;
 
@@ -341,12 +345,20 @@ public class Repository {
 
     /**
      * status 命令
+     *
+     * 使用多线程进行优化，开启线程池分别执行各类文件的查找
+     * 对于一个数量较少（大小110kb）的文件 优化前：110ms   优化后：85ms
      */
+/* 优化前：
     public static void status(){
+        long startTime = System.nanoTime();
         checkIfGitletExists();
         StringBuilder returnSB = new StringBuilder();
 
-        /** Branches. */
+        */
+
+/** Branches. *//*
+
         //获取当前branch
         String curBranch = readContentsAsString(HEAD);
         //获取所有branch
@@ -362,7 +374,9 @@ public class Repository {
         }
         returnSB.append("\n");
 
-        /** Staged Files */
+        */
+/** Staged Files *//*
+
         //获取暂存区状态
         Index changes=Index.getStagingArea();
 
@@ -374,7 +388,9 @@ public class Repository {
         }
         returnSB.append("\n");
 
-        /** Removed Files */
+        */
+/** Removed Files *//*
+
         String[] removedFiles = changes.removed.keySet().toArray(new String[0]);
         Arrays.sort(removedFiles);
         returnSB.append("=== Removed Files ===\n");
@@ -383,7 +399,9 @@ public class Repository {
         }
         returnSB.append("\n");
 
-        /** Modifications Not Staged For Commit */
+        */
+/** Modifications Not Staged For Commit *//*
+
         //这里的modified的文件是指 当前HEAD commit追踪 但在working dir中更改 但还未被添加进staging area中的文件
         returnSB.append("=== Modifications Not Staged For Commit ===\n");
         HashMap<String, String> newBlobs = getNewBlobs(getHeadCommit(), changes);
@@ -404,13 +422,17 @@ public class Repository {
         }
         returnSB.append("\n");
 
-        /** ----just in case i got confused again next time~----
+        */
+/** ----just in case i got confused again next time~----
          * 关于在modifiedFile和untracked中 for循环遍历的对象不一样：  因为两者的执行逻辑有区别
          * Modified Files：遍历 newBlobs 是为了找出那些在版本控制系统中已有记录，但在工作目录中被修改且未暂存的文件。
          * Untracked Files：遍历 snapshot 是为了找出那些在工作目录中存在，但在版本控制系统中没有任何记录的全新文件。
-         */
+         *//*
 
-        /** Untracked Files */
+
+        */
+/** Untracked Files *//*
+
         returnSB.append("=== Untracked Files ===\n");
         TreeSet<String> untracked=new TreeSet<>();
         for(Map.Entry<String,String> entry : snapshot.entrySet()){
@@ -424,7 +446,98 @@ public class Repository {
         returnSB.append("\n");
 
         System.out.println(returnSB.toString());
+        long endTime = System.nanoTime();
+        long duration = (endTime - startTime) / 1_000_000; // 将纳秒转为毫秒
+        System.out.println("Execution time (unmodified): " + duration + " ms");
     }
+*/
+
+public static void status() {
+    long startTime = System.nanoTime();
+
+    // 修改后的代码逻辑（使用多线程）
+    ExecutorService executor = Executors.newFixedThreadPool(3);
+    Index changes = Index.getStagingArea();
+
+    Future<String> stagedFilesFuture = executor.submit(() -> {
+        StringBuilder sb = new StringBuilder();
+        String[] stagedFiles = changes.staged.keySet().toArray(new String[0]);
+        Arrays.sort(stagedFiles);
+        sb.append("=== Staged Files ===\n");
+        for (String stagedFile : stagedFiles) {
+            sb.append(stagedFile).append("\n");
+        }
+        sb.append("\n");
+        return sb.toString();
+    });
+
+    Future<String> removedFilesFuture = executor.submit(() -> {
+        StringBuilder sb = new StringBuilder();
+        String[] removedFiles = changes.removed.keySet().toArray(new String[0]);
+        Arrays.sort(removedFiles);
+        sb.append("=== Removed Files ===\n");
+        for (String removedFile : removedFiles) {
+            sb.append(removedFile).append("\n");
+        }
+        sb.append("\n");
+        return sb.toString();
+    });
+
+    Future<String> modificationsFuture = executor.submit(() -> {
+        StringBuilder sb = new StringBuilder();
+        HashMap<String, String> newBlobs = getNewBlobs(getHeadCommit(), changes);
+        HashMap<String, String> snapshot = takeSnapshot();
+        TreeSet<String> modifiedFiles = new TreeSet<>();
+        for (Map.Entry<String, String> entry : newBlobs.entrySet()) {
+            if (snapshot.containsKey(entry.getKey()) && !snapshot.get(entry.getKey()).equals(entry.getValue())) {
+                modifiedFiles.add(entry.getKey() + " (modified)");
+            } else if (!snapshot.containsKey(entry.getKey())) {
+                modifiedFiles.add(entry.getKey() + " (deleted)");
+            }
+        }
+        sb.append("=== Modifications Not Staged For Commit ===\n");
+        for (String entry : modifiedFiles) {
+            sb.append(entry).append("\n");
+        }
+        sb.append("\n");
+        return sb.toString();
+    });
+
+    Future<String> untrackedFilesFuture = executor.submit(() -> {
+        StringBuilder sb = new StringBuilder();
+        HashMap<String, String> snapshot = takeSnapshot();
+        HashMap<String, String> newBlobs = getNewBlobs(getHeadCommit(), changes);
+        TreeSet<String> untracked = new TreeSet<>();
+        for (Map.Entry<String, String> entry : snapshot.entrySet()) {
+            if (!newBlobs.containsKey(entry.getKey())) {
+                untracked.add(entry.getKey());
+            }
+        }
+        sb.append("=== Untracked Files ===\n");
+        for (String entry : untracked) {
+            sb.append(entry).append("\n");
+        }
+        sb.append("\n");
+        return sb.toString();
+    });
+
+    try {
+        StringBuilder returnSB = new StringBuilder();
+        returnSB.append(stagedFilesFuture.get());
+        returnSB.append(removedFilesFuture.get());
+        returnSB.append(modificationsFuture.get());
+        returnSB.append(untrackedFilesFuture.get());
+        System.out.println(returnSB.toString());
+    } catch (InterruptedException | ExecutionException e) {
+        e.printStackTrace();
+    } finally {
+        executor.shutdown();
+    }
+
+    long endTime = System.nanoTime();
+    long duration = (endTime - startTime) / 1_000_000; // 将纳秒转为毫秒
+    System.out.println("Execution time (modified): " + duration + " ms");
+}
 
     /**
      * find 命令
