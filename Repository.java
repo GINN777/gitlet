@@ -2,10 +2,7 @@ package gitlet;
 
 import java.io.File;
 import java.util.*;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.concurrent.*;
 
 import static gitlet.Utils. *;
 
@@ -349,15 +346,14 @@ public class Repository {
      * 使用多线程进行优化，开启线程池分别执行各类文件的查找
      * 对于一个数量较少（大小110kb）的文件 优化前：110ms   优化后：85ms
      */
-/* 优化前：
+/*      优化前：
     public static void status(){
         long startTime = System.nanoTime();
         checkIfGitletExists();
         StringBuilder returnSB = new StringBuilder();
 
         */
-
-/** Branches. *//*
+        /** Branches. *//*
 
         //获取当前branch
         String curBranch = readContentsAsString(HEAD);
@@ -375,7 +371,7 @@ public class Repository {
         returnSB.append("\n");
 
         */
-/** Staged Files *//*
+        /** Staged Files *//*
 
         //获取暂存区状态
         Index changes=Index.getStagingArea();
@@ -389,7 +385,7 @@ public class Repository {
         returnSB.append("\n");
 
         */
-/** Removed Files *//*
+        /** Removed Files *//*
 
         String[] removedFiles = changes.removed.keySet().toArray(new String[0]);
         Arrays.sort(removedFiles);
@@ -400,7 +396,7 @@ public class Repository {
         returnSB.append("\n");
 
         */
-/** Modifications Not Staged For Commit *//*
+        /** Modifications Not Staged For Commit *//*
 
         //这里的modified的文件是指 当前HEAD commit追踪 但在working dir中更改 但还未被添加进staging area中的文件
         returnSB.append("=== Modifications Not Staged For Commit ===\n");
@@ -423,15 +419,13 @@ public class Repository {
         returnSB.append("\n");
 
         */
-/** ----just in case i got confused again next time~----
+        /** ----just in case i got confused again next time~----
          * 关于在modifiedFile和untracked中 for循环遍历的对象不一样：  因为两者的执行逻辑有区别
          * Modified Files：遍历 newBlobs 是为了找出那些在版本控制系统中已有记录，但在工作目录中被修改且未暂存的文件。
          * Untracked Files：遍历 snapshot 是为了找出那些在工作目录中存在，但在版本控制系统中没有任何记录的全新文件。
          *//*
-
-
         */
-/** Untracked Files *//*
+        /** Untracked Files *//*
 
         returnSB.append("=== Untracked Files ===\n");
         TreeSet<String> untracked=new TreeSet<>();
@@ -452,125 +446,161 @@ public class Repository {
     }
 */
 
-public static void status() {
-    long startTime = System.nanoTime();
+    public static void status() {
+            checkIfGitletExists();
+            StringBuilder returnSB = new StringBuilder();
 
-    // 修改后的代码逻辑（使用多线程）
-    ExecutorService executor = Executors.newFixedThreadPool(3);
-    Index changes = Index.getStagingArea();
+            ExecutorService executor = Executors.newFixedThreadPool(4);
 
-    Future<String> stagedFilesFuture = executor.submit(() -> {
-        StringBuilder sb = new StringBuilder();
-        String[] stagedFiles = changes.staged.keySet().toArray(new String[0]);
-        Arrays.sort(stagedFiles);
-        sb.append("=== Staged Files ===\n");
-        for (String stagedFile : stagedFiles) {
-            sb.append(stagedFile).append("\n");
-        }
-        sb.append("\n");
-        return sb.toString();
-    });
+            try {
+                // Branches Task
+                Callable<String> branchesTask = () -> {
+                    StringBuilder sb = new StringBuilder();
+                    String curBranch = readContentsAsString(HEAD);
+                    List<String> branches = plainFilenamesIn(BRANCHES_DIR);
+                    sb.append("=== Branches ===\n");
+                    sb.append("*").append(curBranch).append("\n");
+                    for (String branch : branches) {
+                        if (!branch.equals(curBranch)) {
+                            sb.append(branch).append("\n");
+                        }
+                    }
+                    sb.append("\n");
+                    return sb.toString();
+                };
 
-    Future<String> removedFilesFuture = executor.submit(() -> {
-        StringBuilder sb = new StringBuilder();
-        String[] removedFiles = changes.removed.keySet().toArray(new String[0]);
-        Arrays.sort(removedFiles);
-        sb.append("=== Removed Files ===\n");
-        for (String removedFile : removedFiles) {
-            sb.append(removedFile).append("\n");
-        }
-        sb.append("\n");
-        return sb.toString();
-    });
+                // Staged Files Task
+                Callable<String> stagedFilesTask = () -> {
+                    StringBuilder sb = new StringBuilder();
+                    Index changes = Index.getStagingArea();
+                    String[] stagedFiles = changes.staged.keySet().toArray(new String[0]);
+                    Arrays.sort(stagedFiles);
+                    sb.append("=== Staged Files ===\n");
+                    for (String stagedFile : stagedFiles) {
+                        sb.append(stagedFile).append("\n");
+                    }
+                    sb.append("\n");
+                    return sb.toString();
+                };
 
-    Future<String> modificationsFuture = executor.submit(() -> {
-        StringBuilder sb = new StringBuilder();
-        HashMap<String, String> newBlobs = getNewBlobs(getHeadCommit(), changes);
-        HashMap<String, String> snapshot = takeSnapshot();
-        TreeSet<String> modifiedFiles = new TreeSet<>();
-        for (Map.Entry<String, String> entry : newBlobs.entrySet()) {
-            if (snapshot.containsKey(entry.getKey()) && !snapshot.get(entry.getKey()).equals(entry.getValue())) {
-                modifiedFiles.add(entry.getKey() + " (modified)");
-            } else if (!snapshot.containsKey(entry.getKey())) {
-                modifiedFiles.add(entry.getKey() + " (deleted)");
+                // Removed Files Task
+                Callable<String> removedFilesTask = () -> {
+                    StringBuilder sb = new StringBuilder();
+                    Index changes = Index.getStagingArea();
+                    String[] removedFiles = changes.removed.keySet().toArray(new String[0]);
+                    Arrays.sort(removedFiles);
+                    sb.append("=== Removed Files ===\n");
+                    for (String removedFile : removedFiles) {
+                        sb.append(removedFile).append("\n");
+                    }
+                    sb.append("\n");
+                    return sb.toString();
+                };
+
+                // Modifications Not Staged For Commit Task
+                Callable<String> modificationsTask = () -> {
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("=== Modifications Not Staged For Commit ===\n");
+                    Index changes = Index.getStagingArea();
+                    HashMap<String, String> newBlobs = getNewBlobs(getHeadCommit(), changes);
+                    HashMap<String, String> snapshot = takeSnapshot();
+                    TreeSet<String> modifiedFiles = new TreeSet<>();
+                    for (Map.Entry<String, String> entry : newBlobs.entrySet()) {
+                        if (snapshot.containsKey(entry.getKey()) && !snapshot.get(entry.getKey()).equals(entry.getValue())) {
+                            modifiedFiles.add(entry.getKey() + " (modified)");
+                        } else if (!snapshot.containsKey(entry.getKey())) {
+                            modifiedFiles.add(entry.getKey() + " (deleted)");
+                        }
+                    }
+                    for (String entry : modifiedFiles) {
+                        sb.append(entry).append("\n");
+                    }
+                    sb.append("\n");
+                    return sb.toString();
+                };
+
+                // Untracked Files Task
+                Callable<String> untrackedFilesTask = () -> {
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("=== Untracked Files ===\n");
+                    HashMap<String, String> snapshot = takeSnapshot();
+                    HashMap<String, String> newBlobs = getNewBlobs(getHeadCommit(), Index.getStagingArea());
+                    TreeSet<String> untracked = new TreeSet<>();
+                    for (Map.Entry<String, String> entry : snapshot.entrySet()) {
+                        if (!newBlobs.containsKey(entry.getKey())) {
+                            untracked.add(entry.getKey());
+                        }
+                    }
+                    for (String entry : untracked) {
+                        sb.append(entry).append("\n");
+                    }
+                    sb.append("\n");
+                    return sb.toString();
+                };
+
+                // Execute tasks
+                Future<String> branchesFuture = executor.submit(branchesTask);
+                Future<String> stagedFilesFuture = executor.submit(stagedFilesTask);
+                Future<String> removedFilesFuture = executor.submit(removedFilesTask);
+                Future<String> modificationsFuture = executor.submit(modificationsTask);
+                Future<String> untrackedFilesFuture = executor.submit(untrackedFilesTask);
+
+                // Collect results
+                returnSB.append(branchesFuture.get());
+                returnSB.append(stagedFilesFuture.get());
+                returnSB.append(removedFilesFuture.get());
+                returnSB.append(modificationsFuture.get());
+                returnSB.append(untrackedFilesFuture.get());
+            } catch (Exception e) {
+                e.printStackTrace();
+            } finally {
+                executor.shutdown();
             }
-        }
-        sb.append("=== Modifications Not Staged For Commit ===\n");
-        for (String entry : modifiedFiles) {
-            sb.append(entry).append("\n");
-        }
-        sb.append("\n");
-        return sb.toString();
-    });
 
-    Future<String> untrackedFilesFuture = executor.submit(() -> {
-        StringBuilder sb = new StringBuilder();
-        HashMap<String, String> snapshot = takeSnapshot();
-        HashMap<String, String> newBlobs = getNewBlobs(getHeadCommit(), changes);
-        TreeSet<String> untracked = new TreeSet<>();
-        for (Map.Entry<String, String> entry : snapshot.entrySet()) {
-            if (!newBlobs.containsKey(entry.getKey())) {
-                untracked.add(entry.getKey());
-            }
+            System.out.println(returnSB.toString());
         }
-        sb.append("=== Untracked Files ===\n");
-        for (String entry : untracked) {
-            sb.append(entry).append("\n");
-        }
-        sb.append("\n");
-        return sb.toString();
-    });
-
-    try {
-        StringBuilder returnSB = new StringBuilder();
-        returnSB.append(stagedFilesFuture.get());
-        returnSB.append(removedFilesFuture.get());
-        returnSB.append(modificationsFuture.get());
-        returnSB.append(untrackedFilesFuture.get());
-        System.out.println(returnSB.toString());
-    } catch (InterruptedException | ExecutionException e) {
-        e.printStackTrace();
-    } finally {
-        executor.shutdown();
-    }
-
-    long endTime = System.nanoTime();
-    long duration = (endTime - startTime) / 1_000_000; // 将纳秒转为毫秒
-    System.out.println("Execution time (modified): " + duration + " ms");
-}
 
     /**
      * find 命令
      * 根据message查找commit
      * 并 打印出所有 包含参数message的commit 的ID
      */
-    public static void find(String message){
+    public static void find(String message) {
         checkIfGitletExists();
         StringBuilder returnSB = new StringBuilder();
 
-        //文件路径--->得到sha1值-->转为commit对象--->得到message-->比较message
+        // 文件路径--->得到sha1值-->转为commit对象--->得到message-->比较message
         String[] commitDirs = COMMITS_DIR.list();
-        for(String commitDir : commitDirs){
-            List<String> commits = plainFilenamesIn(commitDir);
-            for(String commit : commits){
-                String ID=commitDir+commit;
-                //将sha-1值转为commit对象
-                Commit commitObj = getCommitBySHA(ID);
-                //对于每一个commit对象 判断其message是否包含 参数message 的信息
-                if(commitObj.getMessage().contains(message)){
-                    returnSB.append(ID);
-                    returnSB.append("\n");
+        for (String commitDir : commitDirs) {
+            List<String> commits = plainFilenamesIn(join(COMMITS_DIR, commitDir));
+            for (String commit : commits) {
+                String ID = commitDir + commit;
+                try {
+                    // 将sha-1值转为commit对象
+                    Commit commitObj = getCommitBySHA(ID);
+                    if (commitObj == null) {
+                        System.out.println("No commit object found for ID: " + ID);
+                        continue;
+                    }
+                    // 对于每一个commit对象 判断其message是否包含 参数message 的信息
+                    if (commitObj.getMessage().contains(message)) {
+                        //若想打印commit的详细信息 可调用上面的printCommit方法
+                        returnSB.append(ID);
+                        returnSB.append("\n");
+                    }
+                } catch (Exception e) {
+                    System.out.println("Error processing commit ID: " + ID);
+                    e.printStackTrace();
                 }
             }
-            if(returnSB.toString().isEmpty()){
-                System.out.println("Found no commit with that message.");
-                System.exit(0);
-            }
-            returnSB.append("\n");
-            System.out.println(returnSB.toString());
         }
+        if (returnSB.toString().isEmpty()) {
+            System.out.println("Found no commit with that message.");
+            System.exit(0);
+        }
+        returnSB.append("\n");
+        System.out.println(returnSB.toString());
     }
-
 
     /**
      * checkout --[file name]
@@ -584,7 +614,7 @@ public static void status() {
     }
 
     /**
-     * 从一个指定commit中取出文件到working dir
+     * 从一个指定commit中取出文件到working dir  commit--blob（hashmap）--sha1（也是路径）--blob文件--读取内容--写入working dir
      * @param commit
      * @param fileName
      */
@@ -612,29 +642,56 @@ public static void status() {
      * checkout --[commit id] --[file name]
      * 用户可根据commit id 或者是 缩写的commit id 检出指定版本文件
      */
-    public static void checkoutFileFromCommitID(String ID,String fileName){
+    public static void checkoutFileFromCommitID(String ID, String fileName) {
         checkIfGitletExists();
-        //通过ID 获得 commit对象
-        if(ID.length()==40){//说明是完整ID
-            checkoutFileFromCommit(getCommitBySHA(ID),fileName);
+
+        if (ID == null || ID.isEmpty()) {
+            System.out.println("Commit ID cannot be null or empty.");
+            System.exit(0);
+        }
+        if (ID.length() < 4) {  // 最小4位
+            System.out.println("Commit ID must be at least 4 characters long.");
+            System.exit(0);
+        }
+        if (fileName == null || fileName.isEmpty()) {
+            System.out.println("File name cannot be null or empty.");
+            System.exit(0);
+        }
+
+        if (ID.length() == 40) {
+            checkoutFileFromCommit(getCommitBySHA(ID), fileName);
             return;
         }
-        //ID是缩写时
-        File commitPrefix=join(COMMITS_DIR,ID.substring(0,2));
-        if(commitPrefix.exists()){
-            //获取这个文件夹下所有文件
-            List<String> commitIDs = plainFilenamesIn(commitPrefix);
-            for(String commitID : commitIDs){
-                if(commitID.startsWith(ID.substring(2))){
-                    // Commit commitObj = getCommitBySHA (commitPrefix + commitID);
-                    Commit commitObj=readObject(join(commitPrefix,commitID),Commit.class);
-                    checkoutFileFromCommit(commitObj,fileName);
-                    return;
-                }
+
+        File commitPrefix = join(COMMITS_DIR, ID.substring(0, 2));
+        if (!commitPrefix.exists()) {
+            System.out.println("No commit with that id exists.");
+            System.exit(0);
+        }
+
+        List<String> commitIDs = plainFilenamesIn(commitPrefix);
+        if (commitIDs == null) {
+            System.out.println("Error reading commit directory.");
+            System.exit(0);
+        }
+
+        List<String> matches = new ArrayList<>();
+        for (String commitID : commitIDs) {
+            if (commitID.startsWith(ID.substring(2))) {
+                matches.add(commitID);
             }
         }
-        System.out.println("No commit with that id exists.");
-        System.exit(0);
+
+        if (matches.isEmpty()) {
+            System.out.println("No commit with that id exists.");
+            System.exit(0);
+        } else if (matches.size() > 1) {
+            System.out.println("Multiple commits match the given prefix. Please provide a more specific ID.");
+            System.exit(0);
+        }
+
+        Commit commitObj = readObject(join(commitPrefix, matches.get(0)), Commit.class);
+        checkoutFileFromCommit(commitObj, fileName);
     }
 
     public static boolean branchExists(String branch){
@@ -652,6 +709,8 @@ public static void status() {
             }
         }
     }
+
+    //根据blob文件的id（sha-1）读取
     public static byte[] getBlobContent(String blobID){
         File blob=join(BLOBS_DIR,blobID.substring(0,2),blobID.substring(2));
         return readContents(blob);
