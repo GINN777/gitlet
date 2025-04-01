@@ -1,6 +1,7 @@
 package gitlet;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -698,14 +699,24 @@ public class Repository {
         File branchFile=join(BRANCHES_DIR,branch);
         return branchFile.exists();
     }
-    public static void checkUntrackedOverwritten(List<String> snapShot,HashMap<String, String> newBlobs,Commit targetCommit){
-        for(String fileName : snapShot){
-            if(!newBlobs.containsKey(fileName)){//说明untracked
-                //如果targetCommit中有该文件，并且sha-1值不一样 则发出提醒并退出
-                if(targetCommit.tracks(fileName) && !targetCommit.fileVersion(fileName).equals(newBlobs.get(fileName))){
-                    System.out.println("There is an untracked file in the way; delete it, or add and commit it first.");
-                    System.exit(0);
-                }
+
+    /**
+     * 检查working dir中未跟踪（untracked）的文件是否会被TargetCommit覆盖  如果会则发出警告
+     * @param snapShot
+     * @param newBlobs
+     * @param targetCommit
+     */
+    public static void checkUntrackedOverwritten(List<String> snapShot, HashMap<String, String> newBlobs, Commit targetCommit) {
+        if (snapShot == null || newBlobs == null || targetCommit == null) {
+            throw new IllegalArgumentException("Input parameters cannot be null");
+        }
+        for (String fileName : snapShot) {
+            File file = join(CWD, fileName);
+            if (!file.isFile()) continue; // 忽略目录
+            if (!newBlobs.containsKey(fileName) && targetCommit.tracks(fileName)) {
+                throw new IllegalStateException(
+                        "Untracked file '" + fileName + "' would be overwritten by checkout. Delete it, or add and commit it first."
+                );
             }
         }
     }
@@ -793,6 +804,8 @@ public class Repository {
 
     /**
      * rm branch [branch name] 命令
+     * TODO : 1. 删除分支前检查是否合并，警告合并后再删除
+     * TODO： 2. 删除分支后存在悬空commit 可通过实现垃圾回收  参考git中设计
      * 只需要删除该分支的指针 不需要删除这个分支下的commit
      */
     public static void removeBranch(String branchName){
@@ -825,7 +838,6 @@ public class Repository {
         String curBranch=readContentsAsString(HEAD);
         writeContents(join(BRANCHES_DIR,curBranch),commitID);
     }
-
     /**
      * merge [branch name] 命令
      * 在给定分支中修改过  在当前分支未修改 --->改为给定分支【branch name】中的版本
@@ -898,7 +910,7 @@ public class Repository {
         if(!bothModified.isEmpty()) {
             for(String fileName : bothModified){
                 //将冲突信息写入文件
-                writeConflict(fileName,curCommit,mergedCommit);
+                writeConflict(fileName,branchName,curCommit,mergedCommit);
                 //将cur branch的冲突文件添加到暂存区  便于解决冲突后重新提交
                 changes.staged.put(fileName,sha1(readContents(join(CWD,fileName))));
             }
@@ -967,13 +979,14 @@ public class Repository {
     private static HashSet<String> modifiedOrAddInMergedBranch(Commit splitPoint,Commit curCommit,Commit mergedCommit){
         HashSet<String> modifiedOrAddInMerge=new HashSet<>();
         for(Map.Entry<String,String> entry : mergedCommit.getBlobs().entrySet() ){
-            //
+            //只在合并分支中修改的文件
             if(splitPoint.tracks(entry.getKey()) &&
                 !splitPoint.fileVersion(entry.getKey()).equals(entry.getValue()) &&
                 curCommit.tracks(entry.getKey()) &&
                 curCommit.fileVersion(entry.getKey()).equals(splitPoint.fileVersion(entry.getKey()))){
                     modifiedOrAddInMerge.add(entry.getKey());
             } else if (!splitPoint.tracks(entry.getKey()) && !curCommit.tracks(entry.getKey())) {
+                //新增的文件
                     modifiedOrAddInMerge.add(entry.getKey());
             }
         }
@@ -992,50 +1005,70 @@ public class Repository {
         return deletedInMerge;
     }
 
-    private static HashSet<String> bothModified(Commit splitPoint,Commit curCommit,Commit mergedCommit){
-        /** the SITUATION where merge and cur branch -MODIFIED IN Different Ways---下面4个if语句分别对应1234
-         *  1. mer and cur 都 新增 但 内容不一样
-         *  2. mer and cur 都 修改
-         *  3. cur 修改 mer 删除
-         *  4. cur 删除 mer 修改
-         *  */
-        HashSet<String> bothModified=new HashSet<>();
-        for(Map.Entry<String,String> entry : curCommit.getBlobs().entrySet()){
-            if(!splitPoint.tracks(entry.getKey()) &&
-                mergedCommit.tracks(entry.getKey()) &&
-                !curCommit.fileVersion(entry.getKey()).equals(mergedCommit.fileVersion(entry.getKey()))){
-                    bothModified.add(entry.getKey());
-            }else if(splitPoint.tracks(entry.getKey()) &&
-                    mergedCommit.tracks(entry.getKey()) &&
-                    splitPoint.fileVersion(entry.getKey()).equals(entry.getValue()) &&
-                    !mergedCommit.fileVersion(entry.getKey()).equals(splitPoint.fileVersion(entry.getKey()))) {
-                //TODO: 感觉这里面还有 both modified ,but in the same way的情况
-                bothModified.add(entry.getKey());
-            }else if(splitPoint.tracks(entry.getKey()) &&
-                    !splitPoint.fileVersion(entry.getKey()).equals(entry.getValue()) &&
-                    !mergedCommit.tracks(entry.getKey())){
-                bothModified.add(entry.getKey());
+    /** the SITUATION where merge and cur branch -MODIFIED IN Different Ways---下面4个if语句分别对应1234
+     *  1. mer and cur 都 新增 但 内容不一样
+     *  2. mer and cur 都 修改
+     *  3. cur 修改 mer 删除
+     *  4. cur 删除 mer 修改
+     *  */
+    private static HashSet<String> bothModified(Commit splitPoint, Commit curCommit, Commit mergedCommit) {
+        HashSet<String> bothModified = new HashSet<>();
+
+        // 检查 curCommit 中的文件
+        if (curCommit.getBlobs() != null) {
+            for (Map.Entry<String, String> entry : curCommit.getBlobs().entrySet()) {
+                String fileName = entry.getKey();
+                String curVersion = entry.getValue();
+
+                // 情况 1：双方新增，内容不同
+                if (!splitPoint.tracks(fileName) &&
+                        mergedCommit.tracks(fileName) &&
+                        !curVersion.equals(mergedCommit.fileVersion(fileName))) {
+                    bothModified.add(fileName);
+                }
+                // 情况 2：双方修改，内容不同
+                else if (splitPoint.tracks(fileName) &&
+                        mergedCommit.tracks(fileName) &&
+                        !splitPoint.fileVersion(fileName).equals(curVersion) &&
+                        !splitPoint.fileVersion(fileName).equals(mergedCommit.fileVersion(fileName)) &&
+                        !curVersion.equals(mergedCommit.fileVersion(fileName))) {
+                    bothModified.add(fileName);
+                }
+                // 情况 3：当前分支修改，给定分支删除
+                else if (splitPoint.tracks(fileName) &&
+                        !splitPoint.fileVersion(fileName).equals(curVersion) &&
+                        !mergedCommit.tracks(fileName)) {
+                    bothModified.add(fileName);
+                }
             }
         }
-        for(Map.Entry<String,String> entry : mergedCommit.getBlobs().entrySet()){
-            if(splitPoint.tracks(entry.getKey()) &&
-                !splitPoint.fileVersion(entry.getKey()).equals(entry.getValue()) &&
-                !curCommit.tracks(entry.getKey()) ){
-                    bothModified.add(entry.getKey());
+        // 检查 mergedCommit 中的文件
+        if (mergedCommit.getBlobs() != null) {
+            for (Map.Entry<String, String> entry : mergedCommit.getBlobs().entrySet()) {
+                String fileName = entry.getKey();
+                String mergedVersion = entry.getValue();
+
+                // 情况 4：当前分支删除，给定分支修改
+                if (splitPoint.tracks(fileName) &&
+                        !splitPoint.fileVersion(fileName).equals(mergedVersion) &&
+                        !curCommit.tracks(fileName)) {
+                    bothModified.add(fileName);
+                }
             }
         }
         return bothModified;
     }
 
-    private static void writeConflict(String fileName,Commit curCommit,Commit mergedCommit){
-        StringBuilder returnSB=new StringBuilder();
-        File conflictFile=join(CWD,fileName);
+    private static void writeConflict(String fileName, String branchName, Commit curCommit, Commit mergedCommit) {
+        StringBuilder returnSB = new StringBuilder();
+        File conflictFile = join(CWD, fileName);
         returnSB.append("<<<<<<< HEAD\n");
-        returnSB.append(readBlobContentAsString(curCommit,fileName));
-        returnSB.append("=======\n");
-        returnSB.append(readBlobContentAsString(mergedCommit,fileName));
-        returnSB.append(">>>>>>> branch name\n");
-        //将冲突写入到文中
-        writeContents(conflictFile,returnSB.toString());
+        String curContent = curCommit.tracks(fileName) ? readBlobContentAsString(curCommit, fileName) : "(file deleted)";
+        returnSB.append(curContent);
+        returnSB.append("\n=======\n");
+        String mergedContent = mergedCommit.tracks(fileName) ? readBlobContentAsString(mergedCommit, fileName) : "(file deleted)";
+        returnSB.append(mergedContent);
+        returnSB.append("\n>>>>>>> " + branchName + "\n");
+        writeContents(conflictFile, returnSB.toString());
     }
 }
