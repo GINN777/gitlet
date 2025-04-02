@@ -205,24 +205,41 @@ public class Repository {
         /**
          * 几个关键函数： 通过分支名得到该分支的HEAD提交（getHeadCommitID）   通过SHA1值得到commit对象（getCommitBySHA）
          */
-        //Date
         Date timeStamp=new Date();
-        //Parent 当前的head作为新提交的commit的parent
-        //读取HEAD文件获取当前分支名  ---HEAD中存的是当前分支的名字
         String curBranch = readContentsAsString(HEAD);
-        String parent = getHeadCommitID(curBranch);  //parent为sha1值
-        //Blobs     根据sha-1值得到commit对象--->通过commit对象和index(暂存区的变化)得到newBlobs
-        Commit prevCommit=getCommitBySHA(parent);
-        HashMap<String, String> newBlobs = getNewBlobs(prevCommit, changes);
-        //创建并保存新的commit
-        Commit newCommit=new Commit(timeStamp,message,parent,newBlobs);
-        String ID=sha1(newCommit.toString());
-        newCommit.save(ID);
 
-        /** 更新当前分支的最新提交
-         * 写入新提交的SHA-1哈希值 使得下一次获取当前分支的最新提交时，会返回这个新的提交对象
-         * 清空Staging Area */
-        writeContents(join(BRANCHES_DIR,curBranch),ID);
+        String curCommitID = getHeadCommitID(curBranch);  //parent为sha1值
+        //Blobs     根据sha-1值得到commit对象--->通过commit对象和index(暂存区的变化)得到newBlobs
+        Commit prevCommit=getCommitBySHA(curCommitID);
+        HashMap<String, String> newBlobs = getNewBlobs(prevCommit, changes);
+
+        //检查是否为merge冲突后的提交
+        String[] parents;
+        File mergeHeadFile = join(GITLET_DIR, "MERGE_HEAD");
+        if(mergeHeadFile.exists()){
+            String mergedCommitID = readContentsAsString(mergeHeadFile);
+            parents=new String[]{mergedCommitID,curCommitID};
+        }else {
+            parents=new String[]{curCommitID};
+        }
+        //创建并保存新的commit
+        Commit newCommit=new Commit(timeStamp,message,parents,newBlobs);
+        String ID=sha1(newCommit.toString());
+        try {
+            newCommit.save(ID);
+            writeContents(join(BRANCHES_DIR,curBranch),ID);
+        } catch (Exception e) {
+            System.out.println("Error saving commit: " + e.getMessage());
+            System.exit(1);
+        }
+        /** 清理合并状态和暂存区 */
+        if(mergeHeadFile.exists()){
+            if (!mergeHeadFile.delete()) {
+                System.out.println("Error deleting MERGE_HEAD");
+                System.exit(1);
+            }
+            System.out.println("Merge commit completed");
+        }
         changes.clear();
         changes.save();
     }
@@ -908,17 +925,19 @@ public class Repository {
         //处理两个分支中同时修改的文件
         HashSet<String> bothModified = bothModified(splitPoint,curCommit,mergedCommit);
         if(!bothModified.isEmpty()) {
+            System.out.println("both Modified的文件："+bothModified);
             for(String fileName : bothModified){
                 //将冲突信息写入文件
                 writeConflict(fileName,branchName,curCommit,mergedCommit);
                 //将cur branch的冲突文件添加到暂存区  便于解决冲突后重新提交
                 changes.staged.put(fileName,sha1(readContents(join(CWD,fileName))));
             }
+            //将给定分支的 HEAD commit ID 写入临时文件（例如 MERGE_HEAD）。
+            writeContents(join(GITLET_DIR, "MERGE_HEAD"), mergedCommitID);
+            changes.save();
             System.out.println("Encountered a merge conflict.");
+            return;
         }
-
-        //保存暂存区更改
-        changes.save();
 
         //创建新的commit
         Commit mergeCommit=new Commit(
@@ -928,7 +947,7 @@ public class Repository {
                 getNewBlobs(curCommit,changes)
         );
         String newID=sha1(mergeCommit.toString());
-        mergedCommit.save(newID);
+        mergeCommit.save(newID);
         //更新HEAD
         writeContents(join(BRANCHES_DIR,curBranch),newID);
         //清理和保存
@@ -959,6 +978,7 @@ public class Repository {
                 }
             }
         }
+        System.out.println("打印set集合："+history);
         /*遍历given branch  找到拆分点*/
         curID=getHeadCommitID(branchName);
         q.clear();
@@ -966,13 +986,20 @@ public class Repository {
         while(!q.isEmpty()){
             curID=q.poll();
             if(history.contains(curID)){
+                System.out.println("拆分点："+curID);
                 return curID;
             }
+            System.out.println("检查点1："+curID);
+            //TODO： merge操作时此处空指针异常
             Commit curCommit=getCommitBySHA(curID);
             for(String parentID : curCommit.getParents()){
-                q.add(parentID);
+                if(parentID!=null){
+                    System.out.println("检查点2："+parentID);
+                    q.add(parentID);
+                }
             }
         }
+        System.out.println("返回拆分点："+curID);
         return curID;
     }
 
